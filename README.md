@@ -2,8 +2,8 @@
 
 A small self-hosted service that accepts batched, anonymous usage events from
 the [Git Graph Libre](https://github.com/PlohnenSoftware/git-graph-libre)
-VS Code extension and writes them to Postgres. Two routes, one table, no
-framework, no dashboard.
+VS Code extension and writes them to Postgres. Two routes plus a courtesy
+redirect, one table, no framework, no dashboard.
 
 The question this exists to answer: **which features do people actually use, so
 the maintainer knows what to improve.** Everything else is out of scope.
@@ -101,6 +101,11 @@ content-type: application/json
 ```
 GET /healthz  ->  200 {"ok":true,"database":true}   |   503 when Postgres is down
 ```
+
+Every other `GET` — `/`, `/favicon.ico`, even `GET /v1/events` — answers
+`302` to <https://github.com/PlohnenSoftware/git-graph-libre>. There is no UI
+here, so a browser pointed at the ingest lands on the project instead of on
+`404 page not found`. Non-`GET` methods still get `405`.
 
 ### Validation
 
@@ -272,7 +277,7 @@ handlers take a `store` interface that a fake satisfies.
 | File | Role |
 | --- | --- |
 | `main.go` | Entrypoint, config, graceful shutdown |
-| `app.go` | `net/http` handlers, size cap, `/healthz` |
+| `app.go` | `net/http` handlers, size cap, `/healthz`, project redirect |
 | `validate.go` | Pure: shape + charset validation |
 | `mapevent.go` | Pure: `common.*` → column mapping |
 | `db.go` | pgx pool, schema-on-boot, batch insert |

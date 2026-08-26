@@ -1,8 +1,9 @@
 // Command telemetry-ingest accepts batched usage events from the Git Graph
 // Libre VS Code extension and writes them to Postgres.
 //
-// Deliberately small: two routes, one table, no framework, no ORM. The stdlib
-// covers everything except the Postgres driver.
+// Deliberately small: two routes plus a redirect to the project page, one
+// table, no framework, no ORM. The stdlib covers everything except the
+// Postgres driver.
 //
 // This service must never read, log, or store the client's IP address. There
 // is no such column and no access log written here — an explicit maintainer

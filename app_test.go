@@ -145,6 +145,28 @@ func TestHealthReflectsDatabaseReachability(t *testing.T) {
 	}
 }
 
+// Every GET but the health check is a courtesy redirect to the project page,
+// so a browser pointed at the ingest lands somewhere useful.
+func TestGetRedirectsToTheProjectPage(t *testing.T) {
+	paths := []string{"/", "/favicon.ico", "/v1/events", "/deep/unknown/path"}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			recorder := httptest.NewRecorder()
+			newMux(&fakeStore{pingOK: true}, quietLogger()).ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusFound {
+				t.Errorf("status = %d, want 302", recorder.Code)
+			}
+			if got := recorder.Header().Get("location"); got != projectURL {
+				t.Errorf("location = %q, want %q", got, projectURL)
+			}
+		})
+	}
+}
+
+// The catch-all is registered for GET alone, so it must not swallow the 405s
+// that tell a miswired client it used the wrong method.
 func TestMuxRejectsUnknownRoutesAndMethods(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -152,9 +174,9 @@ func TestMuxRejectsUnknownRoutesAndMethods(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{"unknown path", http.MethodGet, "/", http.StatusNotFound},
-		{"wrong method on events", http.MethodGet, "/v1/events", http.StatusMethodNotAllowed},
+		{"wrong method on events", http.MethodDelete, "/v1/events", http.StatusMethodNotAllowed},
 		{"wrong method on health", http.MethodPost, "/healthz", http.StatusMethodNotAllowed},
+		{"wrong method on the catch-all", http.MethodPut, "/", http.StatusMethodNotAllowed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
