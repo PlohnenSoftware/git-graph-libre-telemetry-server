@@ -1,0 +1,65 @@
+# Telemetry ingest + its Postgres, sized for a Coolify deployment on the
+# existing Hetzner VPS.
+#
+# Two Coolify specifics are load-bearing and must not be "tidied away":
+#
+#  1. The public-facing service joins the external `coolify` network AND carries
+#     `traefik.docker.network=coolify`. Coolify's Traefik has no default docker
+#     network, so without both it eventually resolves the container's
+#     unreachable private-network IP and the route returns 504 after the next
+#     unrelated deploy.
+#  2. The app Domain configured in the Coolify UI must include the scheme
+#     (`https://tel.example.com`). A bare hostname makes Coolify emit broken
+#     Traefik labels — empty Host(), the domain treated as a path.
+#
+# Postgres deliberately does NOT join the `coolify` network and publishes no
+# ports. It is reachable only from the ingest container on the private default
+# network. Read it from DataGrip over an SSH tunnel; see README.md.
+
+services:
+  ingest:
+    build: .
+    restart: unless-stopped
+    environment:
+      # Coolify substitutes SERVICE_* variables and persists what it generates.
+      - SERVICE_FQDN_INGEST=/
+      - DATABASE_URL=postgres://telemetry:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/telemetry?sslmode=disable
+      - PORT=8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - coolify
+    labels:
+      - traefik.docker.network=coolify
+    healthcheck:
+      # Run against the binary's own endpoint from outside the container: the
+      # image is distroless and has no shell or curl to test itself with.
+      disable: true
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=telemetry
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=telemetry
+    volumes:
+      - telemetry-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry -d telemetry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # No `ports:` on purpose. Publishing 5432 would expose the database to the
+    # internet, because the Hetzner firewall has 80/443 open and Docker bypasses
+    # UFW. Tunnel instead.
+
+networks:
+  coolify:
+    external: true
+
+volumes:
+  telemetry-data:

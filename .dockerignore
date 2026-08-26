@@ -1,0 +1,8 @@
+# Only the module files and Go sources are needed to build.
+.env
+.gitignore
+telemetry
+telemetry-ingest
+docker-compose.yml
+README.md
+*_test.go

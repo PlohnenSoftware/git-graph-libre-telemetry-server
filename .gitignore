@@ -1,0 +1,6 @@
+# Build output. `go build` defaults to the directory name; the Makefile-less
+# convention here is an explicit -o, but ignore both so neither can be
+# committed by an `git add -A`.
+telemetry
+telemetry-ingest
+.env
