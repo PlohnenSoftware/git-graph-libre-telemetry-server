@@ -180,9 +180,65 @@ than merely unused.
 | `DATABASE_URL` | yes | — | Postgres connection string. Startup fails loudly without it. |
 | `PORT` | no | `8080` | Startup fails on an invalid value rather than binding somewhere unexpected. |
 
+## CI Image Builds (GitHub Actions → GHCR)
+
+The ingest image is **built and tested in GitHub Actions and pushed to GHCR**,
+not built on the Coolify server. See
+[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml),
+which uses the
+[Docker Build and Coolify Deploy](https://github.com/marketplace/actions/docker-build-and-coolify-deploy)
+action.
+
+| Image | From | Used by |
+| --- | --- | --- |
+| `ghcr.io/plohnensoftware/git-graph-libre-telemetry` | `./Dockerfile` | `ingest` |
+
+Tags pushed from `main`: `main`, `latest`, `sha-<full-commit-sha>`.
+`docker-compose.yml` tracks `main` and sets `pull_policy: always`, so a redeploy
+always re-fetches rather than reusing the cached image.
+
+A `test` job (`go vet ./...`, `go test ./...` — hermetic, no database) gates the
+publish, because Coolify may pull a published tag at any time.
+
+This repo publishes a single image, so the Coolify redeploy trigger rides on
+the publish step itself rather than in a job of its own (the split job exists
+for image matrices, where a webhook per leg would deploy a half-published set).
+It needs a repository **variable** `COOLIFY_WEBHOOK_URL` (this app's Deploy
+Webhook URL, with `force=true`) and a repository **secret** `COOLIFY_TOKEN` (a
+Coolify API key with deploy permission). Both must be repo-level: on the GitHub
+Free plan, org-level Actions secrets are unavailable to private repositories
+and resolve to an empty string with no error. The step skips itself when either
+is missing, so a push before configuration still publishes the image.
+
+To roll back, point the image env var at an immutable tag and redeploy:
+
+```
+INGEST_IMAGE=ghcr.io/plohnensoftware/git-graph-libre-telemetry:sha-<commit>
+```
+
+Build locally without CI (the compose file has no `build:` stanza by design):
+
+```bash
+docker build -t telemetry-ingest:local .
+INGEST_IMAGE=telemetry-ingest:local docker compose up ingest
+```
+
+Note the compose file joins the external `coolify` network, so a full `up`
+only works on the Coolify host; locally, bring up Postgres and `go run .` as
+described under [Local development](#local-development).
+
+The host's Docker daemon needs GHCR credentials once — a **classic** PAT
+scoped to `read:packages` (ghcr.io rejects fine-grained tokens), installed as
+root:
+
+```bash
+docker login ghcr.io -u <github-username>
+```
+
 ## Deploying on Coolify
 
-1. Point the app at this directory's `docker-compose.yml`.
+1. Point the app at this directory's `docker-compose.yml` (Build Pack: Docker
+   Compose).
 2. Set the Domain **with the scheme** — `https://tel.example.com`, not a bare
    hostname. A bare hostname makes Coolify emit broken Traefik labels (empty
    `Host()`, the domain treated as a path).
@@ -192,6 +248,9 @@ than merely unused.
    Coolify's Traefik has no default docker network and eventually resolves the
    container's unreachable private-network IP.
 4. Coolify generates and persists `SERVICE_PASSWORD_POSTGRES` itself.
+5. For CI deploys: copy the app's Deploy Webhook URL (Webhooks page) into the
+   `COOLIFY_WEBHOOK_URL` repository variable, and put a Coolify API key with
+   deploy permission into the `COOLIFY_TOKEN` repository secret.
 
 If a route starts 504ing, `docker restart coolify-proxy` forces Traefik to
 re-resolve endpoints.
@@ -219,3 +278,4 @@ handlers take a `store` interface that a fake satisfies.
 | `db.go` | pgx pool, schema-on-boot, batch insert |
 | `schema.sql` | Table + indexes (source of truth) |
 | `*_test.go` | stdlib `testing`, no config, no database |
+| `.github/workflows/docker-publish.yml` | CI: test, build, push to GHCR, Coolify redeploy |

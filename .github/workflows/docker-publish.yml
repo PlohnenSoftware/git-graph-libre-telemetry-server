@@ -1,0 +1,67 @@
+name: Build and Push Docker Image
+
+# Builds the ingest image in GitHub Actions and pushes it to GHCR (private).
+# Coolify then PULLS it; docker-compose.yml carries no `build:` stanza, so
+# nothing is ever compiled on the server. After a successful push the same
+# step calls this app's Coolify Deploy Webhook — a merge to main is a deploy.
+#
+# Single image, single app: the Coolify trigger rides on the publish step
+# itself, which the action documents as fine for this case. (b2g-kampus needs
+# a separate coolify-deploy job only because it publishes a matrix of images,
+# and a webhook per leg would deploy a half-published set.)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A published tag can be pulled by Coolify at any moment, so nothing
+  # known-broken may reach one. The suite needs no database — the handlers
+  # take a store interface a fake satisfies — so no service containers here.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # required: this is what lets the push to GHCR succeed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      # - vars.COOLIFY_WEBHOOK_URL: this app's Deploy Webhook URL. A plain
+      #   variable, not a secret: it is inert without the key, and keeping it
+      #   unmasked means a failed call shows the real URL in the log instead
+      #   of `***`. `force=true` is appended by the action.
+      # - secrets.COOLIFY_TOKEN: a Coolify API key (Keys & Tokens -> API
+      #   tokens) with deploy permission. Repository secret, not org-level:
+      #   on the GitHub Free plan org secrets are unavailable to private
+      #   repos and silently resolve to empty.
+      - name: Build, push, and redeploy
+        uses: PlohnenSoftware/Docker-Build-and-Coolify-Deploy@v1
+        with:
+          image: plohnensoftware/git-graph-libre-telemetry
+          coolify_webhook_url: ${{ vars.COOLIFY_WEBHOOK_URL }}
+          coolify_deploy_api_key: ${{ secrets.COOLIFY_TOKEN }}
