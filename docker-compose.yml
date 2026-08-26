@@ -28,10 +28,10 @@ services:
     environment:
       # Coolify substitutes SERVICE_* variables and persists what it generates.
       - SERVICE_FQDN_INGEST=/
-      - DATABASE_URL=postgres://telemetry:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/telemetry?sslmode=disable
+      - DATABASE_URL=postgres://telemetry:${SERVICE_PASSWORD_POSTGRES}@postgres-git-graph-libre-telemetry:5432/telemetry?sslmode=disable
       - PORT=8080
     depends_on:
-      postgres:
+      postgres-git-graph-libre-telemetry:
         condition: service_healthy
     networks:
       - default
@@ -43,7 +43,11 @@ services:
       # image is distroless and has no shell or curl to test itself with.
       disable: true
 
-  postgres:
+  # Named in full, not `postgres`. The ingest sits on the shared external
+  # `coolify` network, so a bare `postgres` alias there could be another
+  # app's database — Docker DNS would be free to hand us either one. The
+  # long name is the collision guard; do not shorten it.
+  postgres-git-graph-libre-telemetry:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:

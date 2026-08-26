@@ -142,7 +142,7 @@ ssh -N -L 5432:localhost:5432 user@your-vps
 
 If the container does not publish 5432 even on the host, tunnel to the
 container's address on the compose network, or run `docker compose exec
-postgres psql -U telemetry` for a quick look.
+postgres-git-graph-libre-telemetry psql -U telemetry` for a quick look.
 
 ### The query that answers the question
 
@@ -258,7 +258,7 @@ re-resolve endpoints.
 ## Local development
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres-git-graph-libre-telemetry
 export $(grep -v '^#' .env.example | xargs)
 go run .
 go test ./...
