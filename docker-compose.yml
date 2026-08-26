@@ -22,7 +22,7 @@ services:
     # .github/workflows/docker-publish.yml. Deliberately no `build:` stanza:
     # compose prefers building over pulling, so re-adding one silently moves
     # compilation back onto the server.
-    image: ${INGEST_IMAGE:-ghcr.io/plohnensoftware/git-graph-libre-telemetry:main}
+    image: ghcr.io/plohnensoftware/git-graph-libre-telemetry:main
     pull_policy: always
     restart: unless-stopped
     environment:
