@@ -38,10 +38,10 @@ services:
       - coolify
     labels:
       - traefik.docker.network=coolify
-    healthcheck:
-      # Run against the binary's own endpoint from outside the container: the
-      # image is distroless and has no shell or curl to test itself with.
-      disable: true
+    # No `healthcheck:` here on purpose. The image carries its own — the binary
+    # re-invoked as `telemetry-ingest healthcheck` — and an override in this
+    # file would suppress it and put Coolify back to "Healthcheck: not
+    # configured". See the HEALTHCHECK stanza in Dockerfile.
 
   # Named in full, not `postgres`. The ingest sits on the shared external
   # `coolify` network, so a bare `postgres` alias there could be another
@@ -66,9 +66,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    # No `ports:` on purpose. Publishing 5432 would expose the database to the
-    # internet, because the Hetzner firewall has 80/443 open and Docker bypasses
-    # UFW. Tunnel instead.
+    ports:
+      # Bound to the host's loopback, never 0.0.0.0. The UFW-bypass problem is
+      # about wildcard publishes: this DNAT rule only matches traffic already
+      # arriving on the VPS's own 127.0.0.1, which is where an SSH tunnel lands
+      # and where nothing from the internet can reach.
+      #
+      # It exists so DataGrip has a target that survives a redeploy. Tunnelling
+      # to the container's bridge IP works too, but Docker reassigns it on every
+      # deploy, so the saved connection breaks roughly once a week.
+      #
+      # 55432 rather than 5432 on the host side: this VPS runs several Coolify
+      # apps, any of which may want to publish its own Postgres on loopback, and
+      # the first one to bind 5432 would make the others fail to start. It also
+      # means the day someone drops the `127.0.0.1:` prefix by accident, the
+      # mistake is not sitting on the port every scanner tries first.
+      - "127.0.0.1:55432:5432"
 
 networks:
   coolify:

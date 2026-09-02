@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -35,7 +36,18 @@ const (
 	// Bounds startup so a misconfigured DATABASE_URL fails fast and visibly
 	// instead of hanging the container in a restart loop with no output.
 	startupTimeout = 30 * time.Second
+	// Bounds the container HEALTHCHECK probe. Must exceed insertTimeout, which
+	// is what /healthz spends waiting on Postgres: a shorter budget than the
+	// handler's own means a database outage always surfaces as a client
+	// timeout, and the probe never gets to report the 503 that says why. Kept
+	// under the `--timeout` in the Dockerfile so the process reports a reason
+	// instead of being killed.
+	healthCheckTimeout = insertTimeout + time.Second
 )
+
+// healthCheckArg invokes this binary as its own health probe rather than as the
+// server. See runHealthCheck.
+const healthCheckArg = "healthcheck"
 
 func resolvePort(raw string) (int, error) {
 	if raw == "" {
@@ -48,8 +60,52 @@ func resolvePort(raw string) (int, error) {
 	return port, nil
 }
 
+// runHealthCheck probes a running instance over HTTP and is what the image's
+// HEALTHCHECK executes. The runtime image is distroless — no shell, no curl —
+// so the only thing in there capable of testing the service is the service's
+// own binary, invoked as `telemetry-ingest healthcheck`.
+//
+// It deliberately reads no configuration but PORT: a probe that needed
+// DATABASE_URL would fail for reasons that have nothing to do with whether this
+// process is serving.
+func runHealthCheck(url string) error {
+	client := &http.Client{Timeout: healthCheckTimeout}
+
+	response, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	// /healthz already answers 503 when Postgres is unreachable, so status
+	// alone is the whole verdict.
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: unexpected status %d", url, response.StatusCode)
+	}
+	return nil
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Probe mode, before any other configuration is read. Output goes to
+	// stderr in plain text rather than through the JSON logger: Docker keeps
+	// the last few probe outputs in the container's health log, where a bare
+	// sentence is easier to read than a log record.
+	if len(os.Args) > 1 && os.Args[1] == healthCheckArg {
+		port, err := resolvePort(os.Getenv("PORT"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		// 127.0.0.1, not localhost: on hosts where localhost resolves to ::1
+		// first, a probe against a v4-only listener would fail spuriously.
+		if err := runHealthCheck(fmt.Sprintf("http://127.0.0.1:%d/healthz", port)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

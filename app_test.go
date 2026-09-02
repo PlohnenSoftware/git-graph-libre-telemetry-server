@@ -191,6 +191,48 @@ func TestMuxRejectsUnknownRoutesAndMethods(t *testing.T) {
 	}
 }
 
+// The container HEALTHCHECK runs this. It reads nothing but the status line,
+// which /healthz already sets to 503 when Postgres is unreachable.
+func TestRunHealthCheck(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{"serving", http.StatusOK, false},
+		{"database unreachable", http.StatusServiceUnavailable, true},
+		{"anything else", http.StatusNotFound, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+
+			err := runHealthCheck(server.URL + "/healthz")
+			if tc.wantErr && err == nil {
+				t.Errorf("status %d: expected an error", tc.status)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("status %d: unexpected error: %v", tc.status, err)
+			}
+		})
+	}
+}
+
+// The case that matters most in a container: the process is up enough to be
+// exec'd but is not listening yet, or has stopped listening.
+func TestRunHealthCheckFailsWhenNothingIsListening(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := server.URL + "/healthz"
+	server.Close()
+
+	if err := runHealthCheck(url); err == nil {
+		t.Error("expected an error when nothing is listening")
+	}
+}
+
 func TestResolvePort(t *testing.T) {
 	cases := []struct {
 		name    string

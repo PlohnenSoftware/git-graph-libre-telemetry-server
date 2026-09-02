@@ -1,4 +1,4 @@
-module github.com/PlohnenSoftware/git-graph-libre/server/telemetry
+module github.com/PlohnenSoftware/git-graph-libre-telemetry
 
 go 1.25.0
 

@@ -107,6 +107,14 @@ Every other `GET` — `/`, `/favicon.ico`, even `GET /v1/events` — answers
 here, so a browser pointed at the ingest lands on the project instead of on
 `404 page not found`. Non-`GET` methods still get `405`.
 
+`/healthz` is also the container's own health check. The runtime image is
+distroless — no shell, no curl — so the probe is the binary re-invoked as
+`telemetry-ingest healthcheck`, which GETs `http://127.0.0.1:$PORT/healthz` and
+exits non-zero on anything but `200`. It lives in the `HEALTHCHECK` stanza of
+the Dockerfile; do not add a `healthcheck:` key for `ingest` to the compose
+file, because an override there suppresses it and Coolify goes back to
+reporting "Healthcheck: not configured".
+
 ### Validation
 
 All cheap, all in `validate.go`:
@@ -133,21 +141,33 @@ remember.
 
 ## Reading the data
 
-Postgres publishes no ports and is not on the `coolify` network, so it is
-reachable only from the ingest container. That is intentional: 80/443 are open
-on the host firewall and Docker bypasses UFW, so a published 5432 would be
-exposed to the internet.
+Postgres is not on the `coolify` network and publishes only to the VPS's own
+loopback, as `127.0.0.1:55432`. Nothing from the internet can reach it: 80/443
+are open on the host firewall and Docker bypasses UFW, so a wildcard publish
+would put the database online, but a loopback-bound one only answers traffic
+that already arrived on the host — which is what an SSH tunnel delivers. The
+non-default host port keeps it clear of the other Coolify apps on the same box.
 
-Reach it from DataGrip over an SSH tunnel instead:
+Reach it from DataGrip over an SSH tunnel. Configure the data source once and
+the tunnel is saved with it; there is nothing to set up per session:
+
+| DataGrip field | Value |
+| --- | --- |
+| Host | `127.0.0.1` — resolved on the VPS, because the tunnel is on |
+| Port | `55432` |
+| Database / User | `telemetry` / `telemetry` |
+| Password | Coolify → this app → Environment Variables → `SERVICE_PASSWORD_POSTGRES` |
+| SSH/SSL tab | *Use SSH tunnel* → the VPS host, its user, and your key |
+
+The equivalent by hand, if you would rather tunnel outside the IDE:
 
 ```bash
-ssh -N -L 5432:localhost:5432 user@your-vps
-# then point DataGrip at localhost:5432
+ssh -N -L 55432:127.0.0.1:55432 user@your-vps
 ```
 
-If the container does not publish 5432 even on the host, tunnel to the
-container's address on the compose network, or run `docker compose exec
-postgres-git-graph-libre-telemetry psql -U telemetry` for a quick look.
+For a quick look without any of that, `docker exec -it $(docker ps -qf
+name=postgres-git-graph-libre-telemetry) psql -U telemetry -d telemetry` on the
+VPS.
 
 ### The query that answers the question
 
@@ -276,7 +296,7 @@ handlers take a `store` interface that a fake satisfies.
 
 | File | Role |
 | --- | --- |
-| `main.go` | Entrypoint, config, graceful shutdown |
+| `main.go` | Entrypoint, config, graceful shutdown, `healthcheck` probe |
 | `app.go` | `net/http` handlers, size cap, `/healthz`, project redirect |
 | `validate.go` | Pure: shape + charset validation |
 | `mapevent.go` | Pure: `common.*` → column mapping |

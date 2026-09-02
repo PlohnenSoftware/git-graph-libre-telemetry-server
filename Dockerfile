@@ -28,6 +28,13 @@ EXPOSE 8080
 
 USER nonroot:nonroot
 
-# No HEALTHCHECK here on purpose: distroless has no shell or curl to run one.
-# Health is checked over HTTP at GET /healthz by Coolify or the compose file.
+# The binary is its own probe. Distroless has no shell and no curl, so there is
+# nothing else in the image that could run a check — and the exec (JSON) form is
+# mandatory here for the same reason: the shell form would need /bin/sh.
+#
+# This does not go through ENTRYPOINT; Docker execs it directly, which is why
+# the full path is repeated.
+HEALTHCHECK --interval=15s --timeout=8s --start-period=10s --retries=3 \
+    CMD ["/telemetry-ingest", "healthcheck"]
+
 ENTRYPOINT ["/telemetry-ingest"]
