@@ -8,6 +8,17 @@ redirect, one table, no framework, no dashboard.
 The question this exists to answer: **which features do people actually use, so
 the maintainer knows what to improve.** Everything else is out of scope.
 
+**This service stores nothing that could identify or deanonymize a user.** What
+lands in Postgres is exactly the payload the extension documents under
+[Telemetry](https://github.com/PlohnenSoftware/git-graph-libre#telemetry) and
+nothing more — no geolocation, no request headers, no user agent,
+no cookie, no account, no email, and no access log of any kind. The ingest never
+enriches a row, never derives a new field, and never reads anything but the JSON
+body it was posted. There is no identifier here that maps to a person and no
+second field to pivot through, so the data cannot be joined against another
+dataset to work back to one. See
+[What is stored, and what cannot be](#what-is-stored-and-what-cannot-be).
+
 This README is deliberately standalone: the service is a separate deployable
 that shares nothing with the extension's build or toolchain, and the folder is
 written so it can live in (or be extracted to) its own repository.
@@ -32,6 +43,11 @@ branch or tag names, no commit hashes or messages, no author identities, no
 environment variables, no credentials, no installed-extension list. That side
 is documented in the extension repository (`telemetry.json`, inspectable via
 `code --telemetry`).
+
+This ingest is the only receiver of that data, and it stores a strict subset of
+it: the columns in [`schema.sql`](schema.sql) plus one server-side receipt
+timestamp. Nothing is forwarded anywhere else — no third-party analytics, no
+hosted product, no CDN beacon, no export.
 
 Two containers — this ingest plus Postgres — are the whole backend.
 
@@ -134,10 +150,50 @@ Revisit if the endpoint is ever actually abused.
 ## Storage
 
 One table, defined in [`schema.sql`](schema.sql) — the source of truth for
-columns and indexes. Deliberately absent: any column holding, hashing, or
-deriving from a client IP address. The schema is applied idempotently on every
-boot, so a redeploy is a no-op rather than a migration step anyone has to
-remember.
+columns and indexes. The schema is applied idempotently on every boot, so a
+redeploy is a no-op rather than a migration step anyone has to remember.
+
+### What is stored, and what cannot be
+
+**The stored rows are the extension's documented
+[Telemetry](https://github.com/PlohnenSoftware/git-graph-libre#telemetry)
+payload, minus whatever the validator rejects, plus a `received_at` timestamp
+the server sets itself.** That is the complete list. Every column exists in
+`schema.sql`; there is no shadow table, no side channel, and no field this
+service invents about whoever sent the request.
+
+| Never stored | Why it cannot show up later |
+| --- | --- |
+| **Geolocation** — country, region, city, ASN | Would require an IP, which is never read. Avoiding a hosted product's automatic IP geolocation was a main reason to write this ingest at all. |
+| **Request headers, user agent, cookies, referrer** | Nothing outside the JSON body is parsed or persisted. There is no session and no cookie; the endpoint is unauthenticated by design, so there is not even a token to tie requests together. |
+| **Access log or request log** | There is none. `slog` emits startup, shutdown, and insert failures only; the single request-path line is an error string plus a row count — never a body, an address, or a property value. |
+| **Names, emails, accounts, licenses** | Excluded on the client, and there is no column here any of them could land in. Nothing in this system has a user account to begin with. |
+| **File, path, workspace, repo, branch, tag, commit, or author data** | Scrubbed by VS Code, excluded by the extension's `telemetry.json`, and absent from this schema. Nested objects in `data` are dropped rather than stored, so a structure carrying them cannot sneak through. |
+| **Anything joinable to another dataset** | No account id, no install token, no license key, no cross-service correlation id. A leaked dump of this table joins to nothing. |
+
+The two identifier-shaped columns are the closest thing to a pseudonym in the
+schema, and neither is a person:
+
+- **`machine_id`** is VS Code's own `common.vscodemachineid` — an opaque value
+  VS Code anonymizes per install, shares across all extensions, and resets on an
+  OS reinstall. It is not derived from a hardware serial, a hostname, a MAC
+  address, or a user name. It exists here purely as the denominator in
+  `count(distinct machine_id)`.
+- **`session_id`** groups the events of one editor window and is meaningless
+  once that window closes.
+
+Neither can be reversed into a name, an email, a host on a network, or a GitHub
+account, and — with no IP, no headers, and no log — this database offers no
+second field to pivot through. That absence is the point: dropping IPs is what
+makes the rest of the schema safe to keep.
+
+One honest caveat about where the guarantee is enforced: the ingest can only
+decline to store what it is sent, and unknown properties fall through to the
+`props jsonb` column. The client's `telemetry.json` is therefore the real
+enforcement point for *what is collected*, and any new property has to be
+argued for there first. What this service guarantees is the other half — that it
+adds nothing of its own, and that a row can never grow an identifying field
+between the request arriving and the insert.
 
 ## Reading the data
 

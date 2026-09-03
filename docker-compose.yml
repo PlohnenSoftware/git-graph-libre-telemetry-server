@@ -1,6 +1,3 @@
-# Telemetry ingest + its Postgres, sized for a Coolify deployment on the
-# existing Hetzner VPS.
-#
 # Two Coolify specifics are load-bearing and must not be "tidied away":
 #
 #  1. The public-facing service joins the external `coolify` network AND carries
@@ -22,16 +19,16 @@ services:
     # .github/workflows/docker-publish.yml. Deliberately no `build:` stanza:
     # compose prefers building over pulling, so re-adding one silently moves
     # compilation back onto the server.
-    image: ghcr.io/plohnensoftware/git-graph-libre-telemetry:main
+    image: ghcr.io/plohnensoftware/git-graph-libre-telemetry-server:main
     pull_policy: always
     restart: unless-stopped
     environment:
       # Coolify substitutes SERVICE_* variables and persists what it generates.
       - SERVICE_FQDN_INGEST=/
-      - DATABASE_URL=postgres://telemetry:${SERVICE_PASSWORD_POSTGRES}@postgres-git-graph-libre-telemetry:5432/telemetry?sslmode=disable
+      - DATABASE_URL=postgres://telemetry:${SERVICE_PASSWORD_POSTGRES}@postgres-git-graph-libre-telemetry-server:5432/telemetry?sslmode=disable
       - PORT=8080
     depends_on:
-      postgres-git-graph-libre-telemetry:
+      postgres-git-graph-libre-telemetry-server:
         condition: service_healthy
     networks:
       - default
@@ -47,7 +44,7 @@ services:
   # `coolify` network, so a bare `postgres` alias there could be another
   # app's database — Docker DNS would be free to hand us either one. The
   # long name is the collision guard; do not shorten it.
-  postgres-git-graph-libre-telemetry:
+  postgres-git-graph-libre-telemetry-server:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
