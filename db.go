@@ -62,12 +62,21 @@ func newDB(ctx context.Context, dsn string) (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
-// Migrate applies the embedded schema. It runs on every boot: the schema is
-// idempotent, so a redeploy against an existing database is a no-op rather than
-// a step someone has to remember to run.
+// Migrate applies the embedded schema atomically. It runs on every boot: the
+// schema is idempotent, so a redeploy against an existing database is a no-op
+// rather than a step someone has to remember to run.
 func (d *DB) Migrate(ctx context.Context) error {
-	if _, err := d.pool.Exec(ctx, schemaSQL); err != nil {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
 	}
 	return nil
 }

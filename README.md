@@ -134,18 +134,34 @@ Revisit if the endpoint is ever actually abused.
 
 ## Storage
 
-One table, defined in [`schema.sql`](schema.sql) — the source of truth for
-columns and indexes. The schema is applied idempotently on every boot, so a
-redeploy is a no-op rather than a migration step anyone has to remember.
+One event table plus the `schema_migrations` ledger, defined in
+[`schema.sql`](schema.sql) — the source of truth for columns, indexes and
+views. Deliberately absent: any column holding, hashing, or deriving from a
+client IP address. The schema is applied atomically and idempotently on every
+boot, so both fresh databases and deployments created from the branch's base
+commit are supported.
+
+`events.schema_version` identifies the event-row format: rows written before
+the format was versioned are backfilled as version 0 and new rows default to
+version 1. Database-wide changes are tracked separately:
+
+```sql
+select version, description, applied_at
+from public.schema_migrations
+order by version;
+```
 
 ### What is stored, and what cannot be
 
-**The stored rows are the extension's documented
+The stored rows are the extension's documented
 [Telemetry](https://github.com/PlohnenSoftware/git-graph-libre#telemetry)
 payload, minus whatever the validator rejects, plus a `received_at` timestamp
-the server sets itself.** That is the complete list. Every column exists in
-`schema.sql`; there is no shadow table, no side channel, and no field this
-service invents about whoever sent the request.
+the server sets itself. That is the complete list: every column is in
+`schema.sql`, and there is no shadow table, no side channel, and no field this
+service invents about whoever sent the request. The extension's
+[Telemetry](https://github.com/PlohnenSoftware/git-graph-libre#telemetry)
+section is the full user-facing version of this policy, written for the people
+the data comes from; what follows is the server half of it.
 
 | Never stored | Why it cannot show up later |
 | --- | --- |
@@ -156,28 +172,25 @@ service invents about whoever sent the request.
 | **File, path, workspace, repo, branch, tag, commit, or author data** | Scrubbed by VS Code, excluded by the extension's `telemetry.json`, and absent from this schema. Nested objects in `data` are dropped rather than stored, so a structure carrying them cannot sneak through. |
 | **Anything joinable to another dataset** | No account id, no install token, no license key, no cross-service correlation id. A leaked dump of this table joins to nothing. |
 
-The two identifier-shaped columns are the closest thing to a pseudonym in the
-schema, and neither is a person:
-
-- **`machine_id`** is VS Code's own `common.vscodemachineid` — an opaque value
-  VS Code anonymizes per install, shares across all extensions, and resets on an
-  OS reinstall. It is not derived from a hardware serial, a hostname, a MAC
-  address, or a user name. It exists here purely as the denominator in
-  `count(distinct machine_id)`.
-- **`session_id`** groups the events of one editor window and is meaningless
-  once that window closes.
-
-Neither can be reversed into a name, an email, a host on a network, or a GitHub
-account, and — with no IP, no headers, and no log — this database offers no
-second field to pivot through. That absence is the point: dropping IPs is what
-makes the rest of the schema safe to keep.
+`machine_id` is VS Code's own `common.vscodemachineid` — an opaque value VS Code
+anonymizes per install, shares across all extensions, and resets on an OS
+reinstall. It is not derived from a hardware serial, a hostname, a MAC address,
+or a user name. It is the denominator in `count(distinct machine_id)` and the
+grouping key for the per-machine reports under
+[Reading the data](#reading-the-data); it is never enriched, and there is
+nothing in this database to join it outward to. `session_id` groups the events
+of one editor window and is meaningless once that window closes. Neither
+reverses into a name, an email, a host on a network, or a GitHub account, and
+— with no IP, no headers, and no log — there is no second field here to pivot
+through. That absence is the point: dropping IPs is what makes the rest of the
+schema safe to keep.
 
 One honest caveat about where the guarantee is enforced: the ingest can only
 decline to store what it is sent, and unknown properties fall through to the
 `props jsonb` column. The client's `telemetry.json` is therefore the real
 enforcement point for *what is collected*, and any new property has to be
-argued for there first. What this service guarantees is the other half — that it
-adds nothing of its own, and that a row can never grow an identifying field
+argued for there first. What this service guarantees is the other half — that
+it adds nothing of its own, and that a row can never grow an identifying field
 between the request arriving and the insert.
 
 ## Reading the data
@@ -210,19 +223,45 @@ For a quick look without any of that, `docker exec -it $(docker ps -qf
 name=postgres-git-graph-libre-telemetry) psql -U telemetry -d telemetry` on the
 VPS.
 
-### The query that answers the question
+### Recent reports
 
 ```sql
-select feature,
-       count(distinct machine_id)           as installs,
-       count(*)                             as uses,
-       round(100.0 * avg((not ok)::int), 1) as fail_pct
-from events
-where event = 'feature'
-  and received_at > now() - interval '28 days'
-group by feature
+select *
+from public.recent_feature_usage
 order by installs desc;
 ```
+
+Build the per-machine pivot for any rolling period, then query it:
+
+```sql
+call public.refresh_machine_action_pivot_view(interval '30 days');
+
+select *
+from public.machine_action_pivot
+order by event_type, action;
+```
+
+Pass another positive interval or no argument for all history:
+
+```sql
+call public.refresh_machine_action_pivot_view(interval '7 days');
+call public.refresh_machine_action_pivot_view();
+```
+
+The pivot includes feature actions and activations, one generated column per
+machine, and execution counts in its cells. Machine ids may exceed PostgreSQL's
+identifier length, so columns use `machine_<md5>` names. Resolve them with:
+
+```sql
+select machine_id, pivot_column
+from public.machine_action_pivot_column_map
+order by machine_id;
+```
+
+Call the procedure after changing the time window or when a newly observed
+machine needs its own column. The pivot supports up to 1,596 machines; choose a
+narrower interval if that limit is reached. `recent_feature_usage` is the only
+fixed rolling-30-day usage view.
 
 Rank work by **`installs`**, not `uses`. A feature used 200 times by 3 power
 users and one used 200 times by 150 people demand opposite decisions, and raw
@@ -342,6 +381,6 @@ handlers take a `store` interface that a fake satisfies.
 | `validate.go` | Pure: shape + charset validation |
 | `mapevent.go` | Pure: `common.*` → column mapping |
 | `db.go` | pgx pool, schema-on-boot, batch insert |
-| `schema.sql` | Table + indexes (source of truth) |
+| `schema.sql` | Table migrations, indexes and reporting views (source of truth) |
 | `*_test.go` | stdlib `testing`, no config, no database |
 | `.github/workflows/docker-publish.yml` | CI: test, build, push to GHCR, Coolify redeploy |
