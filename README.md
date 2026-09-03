@@ -51,21 +51,6 @@ hosted product, no CDN beacon, no export.
 
 Two containers — this ingest plus Postgres — are the whole backend.
 
-## Design decisions
-
-| Decision | Rationale |
-| --- | --- |
-| **No IP addresses, ever** | Explicitly dropped by the maintainer. Not stored, not hashed, not logged — there is no such column and no access log. Abuse handling stays upstream at Cloudflare. Do not add one "just for debugging". |
-| **No Rybbit** | Web analytics. Pageviews / bounce / referrers / session replay do not exist for an extension; everything collapses to `custom_event` and half the dashboard is dead space. Its cloud API key is also capped at 500 req / 10 min *globally*, and the key ships inside the `.vsix`. |
-| **No PostHog** | Self-hosted is ClickHouse + Kafka + Zookeeper + Redis + Postgres + MinIO. Too much machine for one small VPS, and that deployment shape is no longer really supported. |
-| **No ClickHouse** | Postgres will not be outgrown below millions of events. |
-| **No dashboard container** | The maintainer reads Postgres directly with DataGrip. No Metabase, no Grafana — saves a JVM container. |
-| **Own thin ingest, not a hosted product** | Removes the shared rate limit, the bot-detection problem for a non-browser client, and the automatic IP geolocation that would have to be argued about in a privacy policy. |
-| **No authentication** | By design: any ingest token shipped inside a `.vsix` is public, because a `.vsix` is a zip. Strict validation is the defense instead. |
-| **No rate limiting** | Upstream at Cloudflare — it is free there and sits above this box's bandwidth, so anything Go could reject has already cost the traffic. |
-| **Go, not TypeScript** | The ingest is ~200 lines of write-once-and-forget infrastructure sharing a VPS with other services. A Go static binary idles at ~12 MB RSS in a ~15 MB image against Node's ~60 MB in ~130 MB, and it cuts a public unauthenticated endpoint's dependency tree to one direct module. |
-| **Not Rust** | An async runtime, `serde` derives, and error-type ceremony to save roughly 10 MB over Go on a two-route JSON ingest. |
-| **No web framework** | Go's `net/http` routes two endpoints without help, and `testing` needs no configuration. |
 
 ## Event model
 
