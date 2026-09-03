@@ -62,6 +62,6 @@ jobs:
       - name: Build, push, and redeploy
         uses: PlohnenSoftware/Docker-Build-and-Coolify-Deploy@v1
         with:
-          image: plohnensoftware/git-graph-libre-telemetry
+          image: plohnensoftware/git-graph-libre-telemetry-server
           coolify_webhook_url: ${{ vars.COOLIFY_WEBHOOK_URL }}
           coolify_deploy_api_key: ${{ secrets.COOLIFY_TOKEN }}
